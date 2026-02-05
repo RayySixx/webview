@@ -1,38 +1,67 @@
 import { NextResponse } from 'next/server';
 
-export async function GET(request) {
-  const targetDomain = "http://privserv.my.id:2025";
-  const targetUrl = `${targetDomain}/`;
+const TARGET_DOMAIN = "http://privserv.my.id:2025";
 
+export async function GET(request) {
+  const { searchParams } = new URL(request.url);
+  const apiPath = searchParams.get('path');
+
+  // JIKA REQUEST ADALAH UNTUK API (Login/History/Access)
+  if (apiPath) {
+    try {
+      const res = await fetch(`${TARGET_DOMAIN}/${apiPath}`);
+      const data = await res.json();
+      return NextResponse.json(data);
+    } catch (e) {
+      return NextResponse.json({ error: 'Proxy API Error' }, { status: 500 });
+    }
+  }
+
+  // JIKA REQUEST UNTUK HALAMAN UTAMA (HTML)
   try {
-    const response = await fetch(targetUrl);
+    const response = await fetch(TARGET_DOMAIN);
     let html = await response.text();
 
-    // 1. Tambahkan <base> tag agar asset (CSS/JS) tetap jalan
-    const baseTag = `<base href="${targetUrl}">`;
+    // SUNTIKAN SAKTI: Ubah semua fetch di HTML agar lewat proxy Vercel
+    // Yang tadinya fetch('/api/chat') jadi fetch('/api/proxy?path=api/chat')
+    html = html.replace(/fetch\(['"]\/(.*?)['"]/g, "fetch('/api/proxy?path=$1'");
     
-    // 2. Fix Semua Fungsi Fetch (Mengubah /api ke domain asli)
-    // Kita paksa semua request script yang tadinya ke "/api" jadi ke "http://privserv.my.id:2025/api"
-    html = html.replace(/fetch\(['"]\/api/g, `fetch('${targetDomain}/api`);
-    html = html.replace(/fetch\(['"]\/access\.json/g, `fetch('${targetDomain}/access.json`);
-
-    // 3. Tambahkan Anti-Zoom via Meta Tag (Paksa override)
-    const antiZoomTag = `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />`;
+    // Inject Anti-Zoom & Base URL
+    const headInjection = `
+      <base href="${TARGET_DOMAIN}/">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+      <style>
+        /* Paksa sembunyikan scrollbar putih jika ada */
+        body::-webkit-scrollbar { display: none; }
+        body { -ms-overflow-style: none; scrollbar-width: none; touch-action: pan-x pan-y; }
+      </style>
+    `;
     
-    if (html.includes('<head>')) {
-      html = html.replace('<head>', `<head>${baseTag}${antiZoomTag}`);
-    } else {
-      html = baseTag + antiZoomTag + html;
-    }
+    html = html.replace('<head>', `<head>${headInjection}`);
 
     return new NextResponse(html, {
-      status: 200,
-      headers: { 
-        'Content-Type': 'text/html',
-        'Access-Control-Allow-Origin': '*'
-      },
+      headers: { 'Content-Type': 'text/html' }
     });
   } catch (error) {
-    return NextResponse.json({ error: 'Server Error: ' + error.message }, { status: 500 });
+    return NextResponse.json({ error: 'Server Down' }, { status: 500 });
+  }
+}
+
+// HANDLE POST (Buat Chat)
+export async function POST(request) {
+  const { searchParams } = new URL(request.url);
+  const apiPath = searchParams.get('path') || 'api/chat';
+  const body = await request.json();
+
+  try {
+    const res = await fetch(`${TARGET_DOMAIN}/${apiPath}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    return NextResponse.json(data);
+  } catch (e) {
+    return NextResponse.json({ error: 'Post Proxy Error' }, { status: 500 });
   }
 }
