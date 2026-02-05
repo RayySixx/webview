@@ -2,86 +2,76 @@ import { NextResponse } from 'next/server';
 
 const TARGET_DOMAIN = "http://privserv.my.id:2025";
 
-// Helper buat handle request ke server asli
-async function proxyRequest(path, method = 'GET', body = null) {
-  const url = `${TARGET_DOMAIN}/${path.replace(/^\//, '')}`;
-  
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/plain, */*',
-    'Content-Type': 'application/json',
-  };
-
-  try {
-    const options = { method, headers };
-    if (body) options.body = JSON.stringify(body);
-
-    const res = await fetch(url, options);
-    
-    // Kalau server asli balikin JSON, kita ambil JSON
-    const contentType = res.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      return await res.json();
-    }
-    return await res.text();
-  } catch (err) {
-    console.error(`Proxy Error (${method} ${url}):`, err);
-    return { error: 'Gagal terhubung ke server asli', details: err.message };
-  }
-}
-
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const apiPath = searchParams.get('path');
 
-  // 1. Jika ini request API
-  if (apiPath) {
-    const data = await proxyRequest(apiPath, 'GET');
-    return NextResponse.json(data);
-  }
+  // URL yang dituju
+  const finalUrl = apiPath ? `${TARGET_DOMAIN}/${apiPath}` : TARGET_DOMAIN;
 
-  // 2. Jika ini request Halaman Utama (HTML)
   try {
-    const response = await fetch(TARGET_DOMAIN);
-    let html = await response.text();
+    const res = await fetch(finalUrl, {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': 'application/json, text/html, */*'
+      },
+      cache: 'no-store'
+    });
 
-    // SUNTIKAN SAKTI: Bypass Fetch agar lewat proxy
-    // Mencakup /api/chat, /api/history, /access.json
+    const contentType = res.headers.get('content-type') || '';
+
+    // JIKA REQUEST API (JSON)
+    if (apiPath || contentType.includes('application/json')) {
+      const data = await res.json();
+      return NextResponse.json(data);
+    }
+
+    // JIKA REQUEST HTML (HALAMAN UTAMA)
+    let html = await res.text();
+
+    // SUNTIKAN SAKTI: Ubah path fetch agar lewat proxy Vercel
+    // Script ini akan merubah fetch("/api/chat") menjadi fetch("/api/proxy?path=api/chat")
+    // Dan fetch("/access.json") menjadi fetch("/api/proxy?path=access.json")
     html = html.replace(/fetch\(['"]\/(.*?)['"]/g, "fetch('/api/proxy?path=$1'");
     
+    // Tambahin Meta Anti-Zoom dan Base URL
     const headInjection = `
       <base href="${TARGET_DOMAIN}/">
       <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
       <style>
         * { -webkit-touch-callout: none; -webkit-user-select: none; }
-        input, textarea { -webkit-user-select: text; }
-        body { touch-action: manipulation; overflow: hidden; }
+        input, textarea { -webkit-user-select: text !important; }
+        body { touch-action: pan-x pan-y; overflow: hidden; }
       </style>
-      <script>
-        // Anti-zoom via JS
-        document.addEventListener('touchstart', (e) => {
-          if (e.touches.length > 1) e.preventDefault();
-        }, { passive: false });
-      </script>
     `;
     
     html = html.replace('<head>', `<head>${headInjection}`);
 
-    return new NextResponse(html, { headers: { 'Content-Type': 'text/html' } });
-  } catch (error) {
-    return NextResponse.json({ error: 'Server Target Down' }, { status: 500 });
+    return new NextResponse(html, {
+      headers: { 'Content-Type': 'text/html' }
+    });
+
+  } catch (err) {
+    return NextResponse.json({ error: 'Server Error', details: err.message }, { status: 500 });
   }
 }
 
 export async function POST(request) {
   const { searchParams } = new URL(request.url);
   const apiPath = searchParams.get('path') || 'api/chat';
-  
+  const finalUrl = `${TARGET_DOMAIN}/${apiPath}`;
+
   try {
     const body = await request.json();
-    const data = await proxyRequest(apiPath, 'POST', body);
+    const res = await fetch(finalUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
     return NextResponse.json(data);
-  } catch (e) {
-    return NextResponse.json({ error: 'Invalid JSON Body' }, { status: 400 });
+  } catch (err) {
+    return NextResponse.json({ error: 'POST Error', details: err.message }, { status: 500 });
   }
 }
