@@ -1,25 +1,28 @@
 import { NextResponse } from 'next/server';
 
 export async function GET(request) {
-  const targetUrl = "http://privserv.my.id:2025/";
+  const targetDomain = "http://privserv.my.id:2025";
+  const targetUrl = `${targetDomain}/`;
 
   try {
-    const response = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      }
-    });
-    
+    const response = await fetch(targetUrl);
     let html = await response.text();
 
-    // Inject tag <base> supaya gambar, css, dan js yang path-nya relatif 
-    // (misal /style.css) otomatis ngambil ke http://privserv.my.id:2025/style.css
+    // 1. Tambahkan <base> tag agar asset (CSS/JS) tetap jalan
     const baseTag = `<base href="${targetUrl}">`;
     
+    // 2. Fix Semua Fungsi Fetch (Mengubah /api ke domain asli)
+    // Kita paksa semua request script yang tadinya ke "/api" jadi ke "http://privserv.my.id:2025/api"
+    html = html.replace(/fetch\(['"]\/api/g, `fetch('${targetDomain}/api`);
+    html = html.replace(/fetch\(['"]\/access\.json/g, `fetch('${targetDomain}/access.json`);
+
+    // 3. Tambahkan Anti-Zoom via Meta Tag (Paksa override)
+    const antiZoomTag = `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />`;
+    
     if (html.includes('<head>')) {
-      html = html.replace('<head>', `<head>${baseTag}`);
+      html = html.replace('<head>', `<head>${baseTag}${antiZoomTag}`);
     } else {
-      html = baseTag + html;
+      html = baseTag + antiZoomTag + html;
     }
 
     return new NextResponse(html, {
@@ -30,6 +33,6 @@ export async function GET(request) {
       },
     });
   } catch (error) {
-    return NextResponse.json({ error: 'Gagal konek ke server: ' + error.message }, { status: 500 });
+    return NextResponse.json({ error: 'Server Error: ' + error.message }, { status: 500 });
   }
 }
